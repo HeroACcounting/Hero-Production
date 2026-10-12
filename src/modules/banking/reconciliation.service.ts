@@ -17,24 +17,77 @@ export class ReconciliationService {
     private bankAccountService: BankAccountService,
   ) {}
 
+  /**
+   * Stable fingerprint for deduplication across repeated imports.
+   * account + calendar day + amount + normalized description.
+   */
+  static fingerprint(
+    bankAccountId: string,
+    date: string,
+    amount: string,
+    description: string,
+  ): string {
+    const day = date.slice(0, 10);
+    const amt = Number(amount).toFixed(2);
+    const desc = description.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200);
+    return `${bankAccountId}|${day}|${amt}|${desc}`;
+  }
+
   async importTransactions(
     organizationId: string,
     bankAccountId: string,
     transactions: ImportTransactionInput[],
+    options?: { source?: string },
   ) {
     await this.bankAccountService.getGlAccountCode(organizationId, bankAccountId);
 
     const pool = getPool();
+    const client = await pool.connect();
     const inserted: { id: string }[] = [];
-    for (const txn of transactions) {
-      const result = await pool.query(
-        `INSERT INTO bank_transactions (organization_id, bank_account_id, txn_date, description, amount)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [organizationId, bankAccountId, txn.date, txn.description, txn.amount],
-      );
-      inserted.push(result.rows[0]);
+    let duplicatesSkipped = 0;
+    const source = options?.source || 'csv';
+
+    try {
+      await client.query('BEGIN');
+      for (const txn of transactions) {
+        const fp = ReconciliationService.fingerprint(
+          bankAccountId,
+          txn.date,
+          txn.amount,
+          txn.description,
+        );
+        const existing = await client.query(
+          `SELECT id FROM bank_transactions
+           WHERE organization_id = $1 AND bank_account_id = $2 AND import_fingerprint = $3
+           LIMIT 1`,
+          [organizationId, bankAccountId, fp],
+        );
+        if (existing.rows.length > 0) {
+          duplicatesSkipped += 1;
+          continue;
+        }
+        const result = await client.query(
+          `INSERT INTO bank_transactions
+             (organization_id, bank_account_id, txn_date, description, amount, import_fingerprint, import_source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id`,
+          [organizationId, bankAccountId, txn.date, txn.description, txn.amount, fp, source],
+        );
+        inserted.push(result.rows[0]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
-    return { imported: inserted.length, ids: inserted.map((r) => r.id) };
+
+    return {
+      imported: inserted.length,
+      duplicatesSkipped,
+      ids: inserted.map((r) => r.id),
+    };
   }
 
   async listForOrg(organizationId: string, bankAccountId?: string) {

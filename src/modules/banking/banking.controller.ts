@@ -105,6 +105,39 @@ export class BankAccountsController {
     return { success: true, data: result };
   }
 
+  /**
+   * Preview a bank statement (CSV or OFX) without committing transactions.
+   * Client reads the file as text and posts content + format.
+   */
+  @Post(':id/statements/preview')
+  @RequirePermission('bank.import')
+  async previewStatement(
+    @Req() req: any,
+    @Param('id') bankAccountId: string,
+    @Body() dto: ImportFileDto,
+  ) {
+    // Verify account belongs to org
+    await this.bankAccountService.getGlAccountCode(
+      req.membership.organizationId,
+      bankAccountId,
+    );
+    if (!dto.content || dto.content.length > 20 * 1024 * 1024) {
+      throw new BadRequestException('Statement file exceeds the 20 MB limit or is empty.');
+    }
+    const parsed =
+      dto.format === 'ofx' ? parseBankOfx(dto.content) : parseBankCsv(dto.content);
+    return {
+      success: true,
+      data: {
+        rows: parsed.rows.slice(0, 500),
+        rowCount: parsed.rows.length,
+        parseErrors: parsed.errors.slice(0, 50),
+        parseErrorCount: parsed.errors.length,
+        truncated: parsed.rows.length > 500,
+      },
+    };
+  }
+
   /** Import from a CSV or OFX bank statement (file contents as text). */
   @Post(':id/transactions/import-file')
   @RequirePermission('bank.import')
@@ -113,6 +146,13 @@ export class BankAccountsController {
     @Param('id') bankAccountId: string,
     @Body() dto: ImportFileDto,
   ) {
+    await this.bankAccountService.getGlAccountCode(
+      req.membership.organizationId,
+      bankAccountId,
+    );
+    if (!dto.content || dto.content.length > 20 * 1024 * 1024) {
+      throw new BadRequestException('Statement file exceeds the 20 MB limit or is empty.');
+    }
     const parsed =
       dto.format === 'ofx' ? parseBankOfx(dto.content) : parseBankCsv(dto.content);
 
@@ -128,12 +168,14 @@ export class BankAccountsController {
       req.membership.organizationId,
       bankAccountId,
       parsed.rows,
+      { source: dto.format },
     );
 
     return {
       success: true,
       data: {
         ...result,
+        rejected: parsed.errors.length,
         parseErrors: parsed.errors.slice(0, 20),
         parseErrorCount: parsed.errors.length,
       },

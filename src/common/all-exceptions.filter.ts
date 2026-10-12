@@ -23,6 +23,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
+    // Multer file-size limit → HTTP 413 Payload Too Large
+    const errName = exception && typeof exception === 'object' && 'name' in exception
+      ? String((exception as any).name)
+      : '';
+    const errCode = exception && typeof exception === 'object' && 'code' in exception
+      ? String((exception as any).code)
+      : '';
+    if (errName === 'MulterError' || errCode === 'LIMIT_FILE_SIZE') {
+      response.status(413).json({
+        success: false,
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: 'File exceeds the 20 MB upload limit.',
+        },
+      });
+      return;
+    }
+
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const body = exception.getResponse();

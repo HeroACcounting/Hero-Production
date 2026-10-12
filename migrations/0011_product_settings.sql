@@ -27,6 +27,6 @@ CREATE INDEX IF NOT EXISTS idx_notifications_unread
 CREATE INDEX IF NOT EXISTS idx_invoices_org_created ON invoices(organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bills_org_created ON bills(organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bank_accounts_org ON bank_accounts(organization_id);
-CREATE INDEX IF NOT EXISTS idx_bank_transactions_org_date ON bank_transactions(organization_id, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_org_date ON bank_transactions(organization_id, txn_date DESC);
 CREATE INDEX IF NOT EXISTS idx_journal_entries_org_date ON journal_entries(organization_id, entry_date DESC);
 CREATE INDEX IF NOT EXISTS idx_memberships_user_org_active ON memberships(user_id, organization_id) WHERE is_active = TRUE;

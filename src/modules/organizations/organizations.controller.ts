@@ -1,4 +1,10 @@
-import { Body, Controller, Get, Patch, Post, Req, UseGuards, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Patch, Post, Req, Res, UploadedFile, UseGuards, UseInterceptors, BadRequestException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { IsString, IsOptional, IsIn, IsNumber } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { MembershipService } from '../tenancy/membership.service';
@@ -93,7 +99,8 @@ export class OrganizationsController {
   async listMine(@Req() req: any) {
     const pool = getPool();
     const result = await pool.query(
-      `SELECT o.id, o.name, o.country_code, r.name AS role_name
+      `SELECT o.id, o.name, o.country_code, r.name AS role_name,
+              (o.logo_storage_key IS NOT NULL) AS has_logo
        FROM memberships m
        JOIN organizations o ON o.id = m.organization_id
        JOIN roles r ON r.id = m.role_id
@@ -101,5 +108,109 @@ export class OrganizationsController {
       [req.userId],
     );
     return { success: true, data: result.rows };
+  }
+
+  private logoRoot() {
+    return path.resolve(process.env.DOCUMENT_STORAGE_DIR || path.join(process.cwd(), 'storage', 'documents'), 'logos');
+  }
+
+  @Post('current/logo')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('org.manage')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }))
+  async uploadLogo(
+    @Req() req: any,
+    @UploadedFile() file?: { originalname: string; mimetype: string; size: number; buffer: Buffer },
+  ) {
+    if (!file) throw new BadRequestException('Choose a logo image to upload.');
+    const allowedMime = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const allowedExt = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+    if (!allowedMime.has(file.mimetype) || !allowedExt.has(ext)) {
+      throw new BadRequestException('Logo must be PNG, JPG, WEBP or GIF (max 2 MB).');
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      throw new BadRequestException('Logo must be 2 MB or smaller.');
+    }
+
+    const orgId = req.membership.organizationId as string;
+    const root = this.logoRoot();
+    await fs.mkdir(root, { recursive: true });
+
+    // Remove previous logo file if present
+    const pool = getPool();
+    const prev = await pool.query(
+      `SELECT logo_storage_key FROM organizations WHERE id = $1`,
+      [orgId],
+    );
+    const prevKey = prev.rows[0]?.logo_storage_key as string | undefined;
+    if (prevKey) {
+      try {
+        await fs.unlink(path.join(root, path.basename(prevKey)));
+      } catch {
+        /* ignore missing */
+      }
+    }
+
+    const key = `${orgId}-${randomUUID()}${ext}`;
+    await fs.writeFile(path.join(root, key), file.buffer);
+    await pool.query(
+      `UPDATE organizations
+       SET logo_storage_key = $1, logo_mime_type = $2, logo_updated_at = now(), updated_at = now()
+       WHERE id = $3`,
+      [key, file.mimetype, orgId],
+    );
+    return { success: true, data: { has_logo: true } };
+  }
+
+  @Get('current/logo')
+  @UseGuards(PermissionsGuard)
+  async getLogo(@Req() req: any, @Res() res: Response) {
+    const orgId = req.membership.organizationId as string;
+    const pool = getPool();
+    const result = await pool.query(
+      `SELECT logo_storage_key, logo_mime_type FROM organizations WHERE id = $1 AND is_active = TRUE`,
+      [orgId],
+    );
+    const row = result.rows[0];
+    if (!row?.logo_storage_key) {
+      throw new BadRequestException('No logo uploaded for this organization.');
+    }
+    const filePath = path.join(this.logoRoot(), path.basename(row.logo_storage_key));
+    try {
+      const buf = await fs.readFile(filePath);
+      res.setHeader('Content-Type', row.logo_mime_type || 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.send(buf);
+    } catch {
+      throw new BadRequestException('Logo file is missing from storage.');
+    }
+  }
+
+  @Delete('current/logo')
+  @UseGuards(PermissionsGuard)
+  @RequirePermission('org.manage')
+  async deleteLogo(@Req() req: any) {
+    const orgId = req.membership.organizationId as string;
+    const pool = getPool();
+    const prev = await pool.query(
+      `SELECT logo_storage_key FROM organizations WHERE id = $1`,
+      [orgId],
+    );
+    const prevKey = prev.rows[0]?.logo_storage_key as string | undefined;
+    if (prevKey) {
+      try {
+        await fs.unlink(path.join(this.logoRoot(), path.basename(prevKey)));
+      } catch {
+        /* ignore */
+      }
+    }
+    await pool.query(
+      `UPDATE organizations
+       SET logo_storage_key = NULL, logo_mime_type = NULL, logo_updated_at = NULL, updated_at = now()
+       WHERE id = $1`,
+      [orgId],
+    );
+    return { success: true, data: { has_logo: false } };
   }
 }

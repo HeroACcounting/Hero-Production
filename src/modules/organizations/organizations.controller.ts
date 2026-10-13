@@ -98,16 +98,32 @@ export class OrganizationsController {
   @Get('mine')
   async listMine(@Req() req: any) {
     const pool = getPool();
-    const result = await pool.query(
-      `SELECT o.id, o.name, o.country_code, r.name AS role_name,
-              (o.logo_storage_key IS NOT NULL) AS has_logo
-       FROM memberships m
-       JOIN organizations o ON o.id = m.organization_id
-       JOIN roles r ON r.id = m.role_id
-       WHERE m.user_id = $1 AND m.is_active = TRUE`,
-      [req.userId],
-    );
-    return { success: true, data: result.rows };
+    // Prefer logo flag when migration 0014 has been applied; fall back if not.
+    try {
+      const result = await pool.query(
+        `SELECT o.id, o.name, o.country_code, r.name AS role_name,
+                (o.logo_storage_key IS NOT NULL) AS has_logo
+         FROM memberships m
+         JOIN organizations o ON o.id = m.organization_id
+         JOIN roles r ON r.id = m.role_id
+         WHERE m.user_id = $1 AND m.is_active = TRUE AND o.is_active = TRUE
+         ORDER BY o.created_at ASC`,
+        [req.userId],
+      );
+      return { success: true, data: result.rows };
+    } catch {
+      const result = await pool.query(
+        `SELECT o.id, o.name, o.country_code, r.name AS role_name,
+                FALSE AS has_logo
+         FROM memberships m
+         JOIN organizations o ON o.id = m.organization_id
+         JOIN roles r ON r.id = m.role_id
+         WHERE m.user_id = $1 AND m.is_active = TRUE AND o.is_active = TRUE
+         ORDER BY o.created_at ASC`,
+        [req.userId],
+      );
+      return { success: true, data: result.rows };
+    }
   }
 
   private logoRoot() {

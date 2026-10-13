@@ -7,8 +7,31 @@ import { RequirePermission } from '../rbac/require-permission.decorator';
 import { DocumentsService, StoredUpload } from './documents.service';
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
-const ALLOWED_MIME_TYPES = new Set(['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/png', 'image/jpeg']);
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.png', '.jpg', '.jpeg']);
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/csv',
+  'text/plain',
+  'application/csv',
+  'application/vnd.ms-excel',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/x-ofx',
+  'application/vnd.intu.qfx',
+  'application/ofx',
+]);
+const ALLOWED_EXTENSIONS = new Set([
+  '.pdf', '.doc', '.docx',
+  '.xls', '.xlsx', '.csv',
+  '.txt',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif',
+  '.ofx', '.qfx',
+]);
 
 @Controller('api/v1/documents')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -26,7 +49,7 @@ export class DocumentsController {
     if (!file) throw new BadRequestException('Choose a document to upload.');
     const extension = file.originalname.slice(file.originalname.lastIndexOf('.')).toLowerCase();
     if (!ALLOWED_EXTENSIONS.has(extension) || !ALLOWED_MIME_TYPES.has(file.mimetype)) {
-      throw new BadRequestException('Only PDF, DOCX, PNG, JPG and JPEG files are supported.');
+      throw new BadRequestException('Supported files: PDF, DOC, DOCX, XLS, XLSX, CSV, TXT, PNG, JPG, WEBP, GIF, OFX, QFX (max 20 MB).');
     }
     if (file.size > MAX_FILE_SIZE) throw new BadRequestException('Maximum document size is 20 MB.');
     const entityType = body.entityType || 'DOCUMENT';
